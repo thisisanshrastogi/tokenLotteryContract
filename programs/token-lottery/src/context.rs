@@ -6,8 +6,25 @@ use anchor_spl::{
 };
 
 use crate::store::*;
+#[derive(Accounts)]
+pub struct InitializeGlobalState<'info> {
+    #[account(mut)]
+    pub payer: Signer<'info>,
+
+    #[account(
+        init,
+        payer = payer,
+        seeds = [b"global_state"],
+        bump,
+        space = 8 + GlobalState::INIT_SPACE
+    )]
+    pub global_state: Account<'info, GlobalState>,
+
+    pub system_program: Program<'info, System>,
+}
 
 #[derive(Accounts)]
+#[instruction(lottery_id: u64)]
 pub struct InitializeLottery<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -18,17 +35,24 @@ pub struct InitializeLottery<'info> {
         mint::decimals = 0,
         mint::authority = collection_mint,
         mint::freeze_authority = collection_mint,
-        seeds = [b"collection_mint".as_ref()],
+        seeds = [b"collection_mint".as_ref(),token_lottery.key().as_ref()],
         bump,
     )]
     pub collection_mint: InterfaceAccount<'info, Mint>,
+
+    #[account(
+    mut,
+    seeds = [b"token_lottery", &lottery_id.to_le_bytes()],
+    bump = token_lottery.bump,
+)]
+    pub token_lottery: Account<'info, TokenLottery>,
 
     #[account(
         init,
         payer = payer,
         token::mint = collection_mint,
         token::authority = collection_token_account,
-        seeds = [b"collection_associated_token".as_ref()],
+        seeds = [b"collection_associated_token".as_ref(),token_lottery.key().as_ref()],
         bump,
     )]
     pub collection_token_account: InterfaceAccount<'info, TokenAccount>,
@@ -59,6 +83,7 @@ pub struct InitializeLottery<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(lottery_id:u64)]
 pub struct Initialize<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
@@ -67,22 +92,30 @@ pub struct Initialize<'info> {
         init,
         payer = payer,
         space = 8 + TokenLottery::INIT_SPACE,
-        seeds = [b"token_lottery".as_ref()],
+        seeds = [b"token_lottery".as_ref(),&lottery_id.to_le_bytes()],
         bump,
     )]
     pub token_lottery: Account<'info, TokenLottery>,
+
+    #[account(
+        mut,
+        seeds = [b"global_state"],
+        bump,
+    )]
+    pub global_state: Account<'info, GlobalState>,
+
     pub system_program: Program<'info, System>,
 }
 
 #[derive(Accounts)]
-
+#[instruction(lottery_id: u64)]
 pub struct BuyTicket<'info> {
     #[account(mut)]
     pub buyer: Signer<'info>,
 
     #[account(
         mut,
-        seeds = [b"token_lottery".as_ref()],
+        seeds = [b"token_lottery".as_ref(),&lottery_id.to_le_bytes()],
         bump = token_lottery.bump,
     )]
     pub token_lottery: Account<'info, TokenLottery>,
@@ -90,7 +123,11 @@ pub struct BuyTicket<'info> {
     #[account(
         init,
         payer = buyer,
-        seeds = [token_lottery.total_tickets.to_le_bytes().as_ref()],
+        seeds = [
+    b"ticket",
+    token_lottery.key().as_ref(),
+    token_lottery.total_tickets.to_le_bytes().as_ref()
+],
         bump,
         mint::decimals = 0,
         mint::authority = collection_mint,
@@ -138,7 +175,7 @@ pub struct BuyTicket<'info> {
 
     #[account(
         mut,
-        seeds = [b"collection_mint".as_ref()],
+        seeds = [b"collection_mint".as_ref(),token_lottery.key().as_ref()],
         bump,
     )]
     pub collection_mint: InterfaceAccount<'info, Mint>,
@@ -159,8 +196,9 @@ pub struct BuyTicket<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(lottery_id: u64)]
 pub struct CommitRandomness<'info> {
-    #[account(mut,seeds = [b"token_lottery".as_ref()], bump = token_lottery.bump)]
+    #[account(mut,seeds = [b"token_lottery".as_ref(),&lottery_id.to_le_bytes()], bump = token_lottery.bump)]
     pub token_lottery: Account<'info, TokenLottery>,
     ///CHECK: This account is checked by Switchboard smart contract
     pub randomness_account: UncheckedAccount<'info>,
@@ -168,13 +206,14 @@ pub struct CommitRandomness<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(lottery_id: u64)]
 pub struct RevealWinner<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
     #[account(
         mut,
-        seeds = [b"token_lottery".as_ref()],
+        seeds = [b"token_lottery".as_ref(),&lottery_id.to_le_bytes()],
         bump = token_lottery.bump,
     )]
     pub token_lottery: Account<'info, TokenLottery>,
@@ -184,26 +223,31 @@ pub struct RevealWinner<'info> {
 }
 
 #[derive(Accounts)]
+#[instruction(lottery_id: u64)]
 pub struct ClaimWinnings<'info> {
     #[account(mut)]
     pub payer: Signer<'info>,
 
     #[account(
         mut,
-        seeds = [b"token_lottery".as_ref()],
+        seeds = [b"token_lottery".as_ref(),&lottery_id.to_le_bytes()],
         bump = token_lottery.bump,
     )]
     pub token_lottery: Account<'info, TokenLottery>,
 
     #[account(
         mut,
-        seeds = [b"collection_mint".as_ref()],
+        seeds = [b"collection_mint".as_ref(), token_lottery.key().as_ref()],
         bump,
     )]
     pub collection_mint: InterfaceAccount<'info, Mint>,
 
     #[account(
-        seeds = [token_lottery.winner.to_le_bytes().as_ref()],
+        seeds = [
+    b"ticket",
+    token_lottery.key().as_ref(),
+    token_lottery.winner.to_le_bytes().as_ref()
+],
         bump,
     )]
     pub ticket_mint: InterfaceAccount<'info, Mint>,

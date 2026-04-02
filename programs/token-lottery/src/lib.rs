@@ -1,21 +1,13 @@
 use anchor_lang::prelude::*;
-use anchor_lang::system_program::*;
+// use anchor_lang::system_program::*;
 use anchor_lang::system_program::{transfer, Transfer};
-use anchor_spl::metadata::{
-    create_metadata_accounts_v3, mpl_token_metadata::instructions::CreateMetadataAccountV3,
-    CreateMetadataAccountsV3,
-};
-use anchor_spl::{
-    associated_token::AssociatedToken,
-    metadata::Metadata,
-    token_interface::{mint_to, Mint, MintTo, TokenAccount, TokenInterface},
-};
+use anchor_spl::metadata::{create_metadata_accounts_v3, CreateMetadataAccountsV3};
+use anchor_spl::token_interface::{mint_to, MintTo};
 
 use anchor_spl::metadata::{
     create_master_edition_v3,
     mpl_token_metadata::types::{CollectionDetails, Creator, DataV2},
-    set_and_verify_collection, sign_metadata, CreateMasterEditionV3,
-    SetAndVerifySizedCollectionItem, SignMetadata,
+    sign_metadata, CreateMasterEditionV3, SetAndVerifySizedCollectionItem, SignMetadata,
 };
 
 pub mod context;
@@ -31,7 +23,7 @@ pub const SYMBOL: &str = "TICK";
 #[constant]
 pub const URI: &str = "https://raw.githubusercontent.com/solana-developers/developer-bootcamp-2024/refs/heads/main/project-9-token-lottery/metadata.json";
 
-declare_id!("Ar4mY3kDJB22X3McHMZq7Ncd2JceKpb5S4gASL6Exh8T");
+declare_id!("EDDjWR1Prvq6fdiA8Lc9oPC43gPCi4XvpLya8sifmhSy");
 
 #[program]
 pub mod token_lottery {
@@ -40,27 +32,51 @@ pub mod token_lottery {
     use switchboard_on_demand::RandomnessAccountData;
 
     use super::*;
+
+    pub fn initialize_global_state(ctx: Context<InitializeGlobalState>) -> Result<()> {
+        let global = &mut ctx.accounts.global_state;
+        global.lottery_count = 0;
+        Ok(())
+    }
     pub fn initialize_config(
         ctx: Context<Initialize>,
+        lottery_id: u64,
         start: u64,
         end: u64,
         price: u64,
     ) -> Result<()> {
+        let global = &mut ctx.accounts.global_state;
+
+        require!(
+            lottery_id == global.lottery_count,
+            ErrorCode::InvalidLotteryId
+        );
+        require!(end > start, ErrorCode::InvalidTime);
+        require!(price > 0, ErrorCode::InvalidTicketPrice);
+
+        ctx.accounts.token_lottery.id = lottery_id;
         ctx.accounts.token_lottery.bump = ctx.bumps.token_lottery;
         ctx.accounts.token_lottery.start_time = start;
         ctx.accounts.token_lottery.end_time = end;
-        ctx.accounts.token_lottery.lottery_pot_amount = price;
+        ctx.accounts.token_lottery.lottery_pot_amount = 0;
         ctx.accounts.token_lottery.authority = *ctx.accounts.payer.key;
         ctx.accounts.token_lottery.total_tickets = 0;
         ctx.accounts.token_lottery.randomness_account = Pubkey::default();
         ctx.accounts.token_lottery.winner_chosen = false;
-        ctx.accounts.token_lottery.ticket_price = 100;
+        ctx.accounts.token_lottery.ticket_price = price;
+
+        global.lottery_count += 1;
+
         Ok(())
     }
 
-    pub fn initialize_lottery(ctx: Context<InitializeLottery>) -> Result<()> {
-        let signer_seeds: &[&[&[u8]]] =
-            &[&[b"collection_mint".as_ref(), &[ctx.bumps.collection_mint]]];
+    pub fn initialize_lottery(ctx: Context<InitializeLottery>, _lottery_id: u64) -> Result<()> {
+        let token_lottery = ctx.accounts.token_lottery.key();
+        let signer_seeds: &[&[&[u8]]] = &[&[
+            b"collection_mint".as_ref(),
+            token_lottery.as_ref(),
+            &[ctx.bumps.collection_mint],
+        ]];
 
         msg!("Creating mint account...");
         mint_to(
@@ -142,7 +158,7 @@ pub mod token_lottery {
         Ok(())
     }
 
-    pub fn buy_ticket(ctx: Context<BuyTicket>) -> Result<()> {
+    pub fn buy_ticket(ctx: Context<BuyTicket>, _lottery_id: u64) -> Result<()> {
         let clock = Clock::get()?;
         let ticket_name = NAME.to_owned()
             + ctx
@@ -152,12 +168,14 @@ pub mod token_lottery {
                 .to_string()
                 .as_str();
 
-        if clock.slot < ctx.accounts.token_lottery.start_time
-            || clock.slot > ctx.accounts.token_lottery.end_time
-        {
+        let start_time = ctx.accounts.token_lottery.start_time;
+        let end_time = ctx.accounts.token_lottery.end_time;
+
+        let now = clock.unix_timestamp as u64;
+
+        if now < start_time || now > end_time {
             return Err(ErrorCode::LotteryNotOpen.into());
         }
-
         transfer(
             CpiContext::new(
                 ctx.accounts.system_program.to_account_info(),
@@ -169,8 +187,13 @@ pub mod token_lottery {
             ctx.accounts.token_lottery.ticket_price,
         )?;
 
-        let signer_seeds: &[&[&[u8]]] =
-            &[&[b"collection_mint".as_ref(), &[ctx.bumps.collection_mint]]];
+        let token_lottery = ctx.accounts.token_lottery.key();
+
+        let signer_seeds: &[&[&[u8]]] = &[&[
+            b"collection_mint".as_ref(),
+            token_lottery.as_ref(),
+            &[ctx.bumps.collection_mint],
+        ]];
 
         mint_to(
             CpiContext::new_with_signer(
@@ -254,18 +277,15 @@ pub mod token_lottery {
             None,
         )?;
 
+        ctx.accounts.token_lottery.lottery_pot_amount += ctx.accounts.token_lottery.ticket_price;
         ctx.accounts.token_lottery.total_tickets += 1;
 
         Ok(())
     }
 
-    pub fn commit_randomness(ctx: Context<CommitRandomness>) -> Result<()> {
+    pub fn commit_randomness(ctx: Context<CommitRandomness>, _lottery_id: u64) -> Result<()> {
         let clock = Clock::get()?;
         let token_lottery = &mut ctx.accounts.token_lottery;
-
-        if ctx.accounts.randomness_account.key() != token_lottery.authority {
-            return Err(ErrorCode::Unauthorized.into());
-        }
 
         let randomness_data =
             RandomnessAccountData::parse(ctx.accounts.randomness_account.data.borrow()).unwrap();
@@ -279,7 +299,7 @@ pub mod token_lottery {
         Ok(())
     }
 
-    pub fn reveal_winner(ctx: Context<RevealWinner>) -> Result<()> {
+    pub fn reveal_winner(ctx: Context<RevealWinner>, _lottery_id: u64) -> Result<()> {
         let clock = Clock::get()?;
         let token_lottery = &mut ctx.accounts.token_lottery;
 
@@ -289,7 +309,9 @@ pub mod token_lottery {
         if ctx.accounts.payer.key() != token_lottery.authority {
             return Err(ErrorCode::Unauthorized.into());
         }
-        if clock.slot < token_lottery.end_time {
+        let now = clock.unix_timestamp as u64;
+
+        if now < token_lottery.end_time {
             msg!("Current slot: {}", clock.slot);
             msg!("End slot: {}", token_lottery.end_time);
             return Err(ErrorCode::LotteryNotCompleted.into());
@@ -318,7 +340,7 @@ pub mod token_lottery {
         Ok(())
     }
 
-    pub fn claim_winnings(ctx: Context<ClaimWinnings>) -> Result<()> {
+    pub fn claim_winnings(ctx: Context<ClaimWinnings>, _lottery_id: u64) -> Result<()> {
         require!(
             ctx.accounts.token_lottery.winner_chosen,
             ErrorCode::WinnerNotChosen
@@ -393,4 +415,13 @@ pub enum ErrorCode {
 
     #[msg("The provided ticket does not match the winning ticket.")]
     IncorrectTicket,
+
+    #[msg("Invalid Lottery ID")]
+    InvalidLotteryId,
+
+    #[msg("Invalid time, end should be greater than start")]
+    InvalidTime,
+
+    #[msg("Ticket price must be greater than zero")]
+    InvalidTicketPrice,
 }

@@ -13,4 +13,11 @@ pub struct TokenLottery {
     pub authority: Pubkey,
     pub randomness_account: Pubkey,
     pub ticket_price: u64,
+    pub id: u64,
+}
+
+#[account]
+#[derive(InitSpace)]
+pub struct GlobalState {
+    pub lottery_count: u64,
 }

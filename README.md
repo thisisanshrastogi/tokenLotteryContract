@@ -1,0 +1,2 @@
+- Idl account created: 2XDtvfM4n2zFaah97tK9q8ofAKMCNFs12BEE7wpHbJ7T
+- Program Id: EDDjWR1Prvq6fdiA8Lc9oPC43gPCi4XvpLya8sifmhSy
