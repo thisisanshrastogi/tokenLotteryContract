@@ -23,7 +23,7 @@ pub const SYMBOL: &str = "TICK";
 #[constant]
 pub const URI: &str = "https://raw.githubusercontent.com/solana-developers/developer-bootcamp-2024/refs/heads/main/project-9-token-lottery/metadata.json";
 
-declare_id!("EDDjWR1Prvq6fdiA8Lc9oPC43gPCi4XvpLya8sifmhSy");
+declare_id!("137WJawxE2JXE4hCmMRAvurvFFsCv3zWum9xBkmu2erb");
 
 #[program]
 pub mod token_lottery {
@@ -287,12 +287,17 @@ pub mod token_lottery {
         let clock = Clock::get()?;
         let token_lottery = &mut ctx.accounts.token_lottery;
 
+        let now = clock.unix_timestamp as u64;
+
+        require!(now > token_lottery.end_time, ErrorCode::LotteryNotCompleted);
+
         let randomness_data =
             RandomnessAccountData::parse(ctx.accounts.randomness_account.data.borrow()).unwrap();
 
-        if randomness_data.seed_slot != clock.slot - 1 {
-            return Err(ErrorCode::RandomnessAlreadyRevealed.into());
-        }
+        require!(
+            randomness_data.seed_slot < clock.slot,
+            ErrorCode::RandomnessNotReady
+        );
 
         token_lottery.randomness_account = ctx.accounts.randomness_account.key();
 
@@ -312,8 +317,6 @@ pub mod token_lottery {
         let now = clock.unix_timestamp as u64;
 
         if now < token_lottery.end_time {
-            msg!("Current slot: {}", clock.slot);
-            msg!("End slot: {}", token_lottery.end_time);
             return Err(ErrorCode::LotteryNotCompleted.into());
         }
         require!(
@@ -324,11 +327,13 @@ pub mod token_lottery {
         let randomness_data =
             RandomnessAccountData::parse(ctx.accounts.randomness_account.data.borrow()).unwrap();
         let revealed_random_value = randomness_data
-            .get_value(clock.slot)
+            .get_value(randomness_data.seed_slot)
             .map_err(|_| ErrorCode::RandomnessNotResolved)?;
 
         msg!("Randomness result: {}", revealed_random_value[0]);
         msg!("Ticket num: {}", token_lottery.total_tickets);
+
+        require!(token_lottery.total_tickets > 0, ErrorCode::NoTicketsSold);
 
         let randomness_result = revealed_random_value[0] as u64 % token_lottery.total_tickets;
 
@@ -395,6 +400,9 @@ pub enum ErrorCode {
     #[msg("Randomness has already been revealed for the current seed slot.")]
     RandomnessAlreadyRevealed,
 
+    #[msg("The randomness provided is not ready yet.")]
+    RandomnessNotReady,
+
     #[msg("The provided randomness account is incorrect.")]
     IncorrectRandomnessAccount,
 
@@ -424,4 +432,7 @@ pub enum ErrorCode {
 
     #[msg("Ticket price must be greater than zero")]
     InvalidTicketPrice,
+
+    #[msg("No tickets were sold for this lottery")]
+    NoTicketsSold,
 }
